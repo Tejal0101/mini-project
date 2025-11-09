@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mood-Based Music Player 🎶</title>
+
+<style>
+  body { font-family: 'Poppins', sans-serif; background: #121212; color: white; text-align: center; padding: 20px; }
+  h1 { color: #1db954; }
+
+  select, input, button {
+    padding: 10px 15px; margin: 10px; border-radius: 8px; border: none; font-size: 16px;
+  }
+
+  .song-card {
+    display: flex; align-items: center;
+    background: #1e1e1e; border-radius: 12px;
+    padding: 10px; margin: 10px auto; max-width: 450px;
+  }
+  .song-card img { width: 65px; height: 65px; border-radius: 10px; margin-right: 12px; }
+  .song-info { flex: 1; text-align: left; }
+  .controls {
+  display: flex;
+  align-items: center;      /* vertically center icons */
+  justify-content: center;  /* horizontally center icons */
+  gap: 12px;
+}
+.controls button {
+  background: #1db954;
+  border: none;
+  border-radius: 50%;
+  width: 36px;              /* better size */
+  height: 36px;
+  cursor: pointer;
+  color: white;
+  font-size: 16px;          /* icon size improved */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.controls button:hover { background: #1ed760; }
+
+
+  #favoritesSection {
+    position: fixed; top: 20px; right: 20px;
+    background: #111; padding: 12px; border-radius: 10px;
+    width: 170px; font-size: 14px; text-align: left;
+  }
+  #favoritesList div { background: #222; margin: 6px 0; padding: 6px; border-radius: 6px; cursor: pointer; }
+
+  #nowPlayingBar {
+    position: fixed; bottom: 0; left: 0; width: 100%; height: 70px;
+    background: #000; border-top: 2px solid #1db954;
+    display: flex; align-items: center; padding: 10px;
+  }
+  #nowPlayingBar img { width: 55px; height: 55px; border-radius: 8px; }
+  .now-info { flex: 1; margin-left: 12px; text-align: left; }
+
+  #lyricsModal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.8);
+    display: none; justify-content: center; align-items: center;
+  }
+  #lyricsContent { background: white; color: black; padding: 20px; border-radius: 12px; width: 400px; max-height: 75vh; overflow-y: auto; }
+</style>
+</head>
+<body>
+
+<h1>🎧 Mood-Based Music Player</h1>
+
+<select id="moodSelect">
+  <option value="">Select Mood</option>
+  <option value="angry">Angry 😡</option>
+  <option value="sad">Sad 😢</option>
+  <option value="happy">Happy 😊</option>
+  <option value="disgust">Disgust 🤢</option>
+  <option value="fear">Fear 😨</option>
+  <option value="neutral">Neutral 😐</option>
+  <option value="surprise">Surprise 😲</option>
+</select>
+
+<select id="languageSelect">
+  <option value="">Language</option>
+  <option value="english">English</option>
+  <option value="hindi">Hindi</option>
+  <option value="kannada">Kannada</option>
+</select>
+
+<input type="text" id="searchInput" placeholder="Search song or artist...">
+<button onclick="loadSongs()">Search</button>
+
+<div id="songList"></div>
+
+<div id="favoritesSection">
+  <h4>❤️ Favorites</h4>
+  <div id="favoritesList">None</div>
+</div>
+
+<div id="nowPlayingBar">
+  <img id="nowCover" src="">
+  <div class="now-info">
+    <p id="nowTitle"></p>
+    <p id="nowArtist"></p>
+  </div>
+  <button onclick="prevSong()">⏮</button>
+  <button id="npPlayPause" onclick="togglePlay()">⏯</button>
+  <button onclick="nextSong()">⏭</button>
+</div>
+
+<div id="lyricsModal">
+  <div id="lyricsContent">
+    <button onclick="lyricsModal.style.display='none'">Close</button>
+    <h3 id="lyricsTitle"></h3>
+    <pre id="lyricsText"></pre>
+  </div>
+</div>
+
+<script>
+let songs = [], favorites = JSON.parse(localStorage.getItem("favorites")) || [], currentIndex = 0;
+const audio = new Audio(), favoritesList = document.getElementById("favoritesList");
+
+// ✅ Artist Based Language Mapping
+const languageArtists = {
+  hindi: ["arijit", "shreya", "sonu", "udit", "atif", "armaan", "alka", "kumar"],
+  kannada: ["rajkumar", "vijay prakash", "puneeth", "hari krishna", "kiccha", "arjun janya", "sonu"],
+  english: [] // if not matched → default english
+};
+
+// ✅ Mood keywords per language
+const moodKeywords = {
+  angry: { english:["angry rock"], hindi:["angry bollywood"], kannada:["kannada mass bgm"] },
+  sad: { english:["sad love"], hindi:["arijit singh sad"], kannada:["kannada sad songs"] },
+  happy: { english:["happy pop"], hindi:["bollywood dance"], kannada:["kannada dance hits"] },
+  disgust: { english:["punk"], hindi:["underground rap"], kannada:["kannada rap"] },
+  fear: { english:["dark ambient"], hindi:["thriller score"], kannada:["horror kannada bgm"] },
+  neutral: { english:["lofi chill"], hindi:["hindi lofi"], kannada:["kannada lofi"] },
+  surprise: { english:["edm remix"], hindi:["fusion bollywood"], kannada:["kannada remix"] }
+};
+
+function getLanguage(song){
+  const a = song.artistName.toLowerCase();
+  if(languageArtists.hindi.some(x=>a.includes(x))) return "hindi";
+  if(languageArtists.kannada.some(x=>a.includes(x))) return "kannada";
+  return "english";
+}
+
+async function loadSongs(){
+  const mood = moodSelect.value, lang = languageSelect.value, search = searchInput.value.trim();
+  const query = search || moodKeywords[mood]?.[lang]?.[0] || "music";
+
+  const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=200`);
+  let data = (await res.json()).results;
+
+  data = data.map(s=>({...s, language:getLanguage(s)}));
+  if(lang) data = data.filter(s=>s.language === lang);
+
+  if(!data.length){ songList.innerHTML="<p>No songs found.</p>"; return; }
+
+  songs = data; currentIndex = 0;
+  displaySongs(); loadSong(0);
+}
+
+function displaySongs(){
+  songList.innerHTML = songs.map((s,i)=>`
+  <div class="song-card">
+    <img src="${s.artworkUrl100}">
+    <div class="song-info"><h3>${s.trackName}</h3><p>${s.artistName}</p></div>
+    <div class="controls">
+      <button onclick="prevSong()">⏮</button>
+      <button onclick="loadSong(${i})">▶️</button>
+      <button onclick="nextSong()">⏭</button>
+      <button onclick="showLyrics(${i})">🎤</button>
+    </div>
+  </div>`).join('');
+}
+
+function loadSong(i){
+  currentIndex=i; audio.src=songs[i].previewUrl; audio.play();
+  nowCover.src=songs[i].artworkUrl100; nowTitle.textContent=songs[i].trackName; nowArtist.textContent=songs[i].artistName;
+}
+
+function togglePlay(){ audio.paused?audio.play():audio.pause(); }
+function nextSong(){ currentIndex=(currentIndex+1)%songs.length; loadSong(currentIndex); }
+function prevSong(){ currentIndex=(currentIndex-1+songs.length)%songs.length; loadSong(currentIndex); }
+
+async function showLyrics(i){
+  lyricsModal.style.display="flex";
+  lyricsTitle.textContent=songs[i].trackName;
+  const r = await fetch(`https://api.lyrics.ovh/v1/${songs[i].artistName}/${songs[i].trackName}`);
+  lyricsText.textContent = (await r.json()).lyrics || "Lyrics not found";
+}
+</script>
+
+</body>
+</html>
