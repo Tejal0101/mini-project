@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Mood-Based Music Player</title>
+<style>
+  body { font-family: 'Poppins', sans-serif; background: #121212; color: white; text-align: center; padding: 20px; }
+  h1 { color: #1db954; }
+  select, input, button { padding: 10px 15px; margin: 10px; border-radius: 8px; border: none; font-size: 16px; }
+  .song-card { display:flex; align-items:center; background:#1e1e1e; border-radius:12px; padding:10px; margin:10px auto; max-width:450px; }
+  .song-card img { width:65px; height:65px; border-radius:10px; margin-right:12px; }
+  .song-info { flex:1; text-align:left; }
+  .controls { display:flex; gap:8px; align-items:center; }
+  #nowPlayingBar { position:fixed; bottom:0; left:0; width:100%; height:70px; background:#000; border-top:2px solid #1db954; display:flex; align-items:center; padding:10px; }
+  #lyricsModal { position: fixed; inset:0; background: rgba(0,0,0,0.8); display:none; justify-content:center; align-items:center; }
+  #lyricsContent { background:white; color:black; padding:20px; border-radius:12px; width:400px; max-height:75vh; overflow-y:auto; }
+  #cam { background: #000; border-radius:8px; width: 360px; height: 270px; object-fit: cover; display:block; margin:0 auto; }
+  #deviceRow { display:flex; justify-content:center; gap:8px; align-items:center; flex-wrap:wrap; }
+  #detectorBadge { position: fixed; left: 18px; top: 18px; background: rgba(255,255,255,0.06); color:#fff; padding:8px 12px; border-radius:10px; font-size:13px; z-index:9999; display:none; }
+</style>
+</head>
+<body>
+
+<h1>🎧 Mood-Based Music Player</h1>
+
+<div style="display:flex; justify-content:center; gap:10px; align-items:center; flex-wrap:wrap;">
+  <select id="moodSelect">
+    <option value="">Select Mood</option>
+    <option value="angry">Angry 😡</option>
+    <option value="sad">Sad 😢</option>
+    <option value="happy">Happy 😊</option>
+    <option value="disgust">Disgust 🤢</option>
+    <option value="fear">Fear 😨</option>
+    <option value="neutral">Neutral 😐</option>
+    <option value="surprise">Surprise 😲</option>
+  </select>
+
+  <select id="languageSelect">
+    <option value="">Language</option>
+    <option value="english">English</option>
+    <option value="hindi">Hindi</option>
+    <option value="kannada">Kannada</option>
+    <option value="telugu">Telugu</option>
+  </select>
+
+  <input type="text" id="searchInput" placeholder="Search song or artist...">
+  <button id="searchBtn">Search</button>
+</div>
+
+<div>
+  <video id="cam" autoplay playsinline></video>
+  <div id="deviceRow">
+    <label for="videoSelect">Choose Camera:</label>
+    <select id="videoSelect" style="min-width:220px"></select>
+    <button id="startCamSelectedBtn">Start Selected Camera</button>
+  </div>
+  <div id="deviceRow">
+    <button id="enableDevicesBtn">Enable Audio Devices</button>
+    <select id="outputSelect" style="display:none;"></select>
+    <p id="deviceStatus" style="color:#fff;"></p>
+  </div>
+  <div id="deviceRow">
+    <button id="detectOnceBtn">Detect Mood Now</button>
+    <button id="toggleAutoDetectBtn">Start Auto-Detect</button>
+  </div>
+</div>
+
+<div id="songList"></div>
+
+<div id="nowPlayingBar">
+  <img id="nowCover" src="" style="width:55px;height:55px;border-radius:8px;">
+  <div class="now-info" style="flex:1;margin-left:12px;text-align:left;">
+    <p id="nowTitle"></p>
+    <p id="nowArtist"></p>
+  </div>
+  <button id="prevBtn">⏮</button>
+  <button id="playPauseBtn">⏯</button>
+  <button id="nextBtn">⏭</button>
+</div>
+
+<div id="lyricsModal">
+  <div id="lyricsContent">
+    <button id="closeLyricsBtn">Close</button>
+    <h3 id="lyricsTitle"></h3>
+    <pre id="lyricsText"></pre>
+  </div>
+</div>
+
+<div id="detectorBadge"></div>
+
+<script>
+/* ---------------- CONFIG ---------------- */
+const BACKEND_BASE = 'http://localhost:5000'; // change to ngrok/production when sharing
+
+/* ---------------- State ---------------- */
+let songs = [], currentIndex = 0, favorites = JSON.parse(localStorage.getItem("favorites") || "[]");
+const audio = new Audio();
+audio.crossOrigin = "anonymous";
+window.__headphonesConnected = false;
+
+/* ---------------- Language / Mood mapping ---------------- */
+const languageArtists = {
+  hindi: ["arijit","shreya","sonu","udit","atif","armaan","alka","kumar","neha","sunidhi","mika"],
+  kannada: ["rajkumar","vijay prakash","puneeth","hari krishna","kiccha","arjun janya","sonu"],
+  telugu: ["arrahman","sukhwinder","deva","dsp","anirudh","ilayaraja","shreya","sonu","sreerama","rashmika","siddu"],
+  english: []
+};
+
+const moodKeywords = {
+  angry: { english:["angry rock"], hindi:["angry bollywood"], kannada:["kannada mass bgm","kannada angry"], telugu:["telugu mass bgm","telugu angry"] },
+  sad: { english:["sad love"], hindi:["arijit singh sad"], kannada:["kannada sad songs","kannada heartbreak"], telugu:["telugu sad songs","telugu heartbreak"] },
+  happy: { english:["happy pop"], hindi:["bollywood dance"], kannada:["kannada dance hits","kannada party"], telugu:["telugu dance hits","telugu party"] },
+  disgust: { english:["punk"], hindi:["underground rap"], kannada:["kannada rap"], telugu:["telugu rap"] },
+  fear: { english:["dark ambient"], hindi:["thriller score"], kannada:["horror kannada bgm"], telugu:["horror telugu bgm"] },
+  neutral: { english:["lofi chill"], hindi:["hindi lofi"], kannada:["kannada lofi"], telugu:["telugu lofi"] },
+  surprise: { english:["edm remix"], hindi:["fusion bollywood"], kannada:["kannada remix"], telugu:["telugu remix"] }
+};
+
+function getLanguageFromArtistName(artistName){
+  const a = (artistName||"").toLowerCase();
+  if (languageArtists.hindi.some(x=>a.includes(x))) return "hindi";
+  if (languageArtists.kannada.some(x=>a.includes(x))) return "kannada";
+  if (languageArtists.telugu && languageArtists.telugu.some(x=>a.includes(x))) return "telugu";
+  return "english";
+}
+
+/* ---------------- UI wiring ---------------- */
+document.getElementById('searchBtn').addEventListener('click', loadSongs);
+document.getElementById('playPauseBtn').addEventListener('click', ()=> audio.paused ? audio.play() : audio.pause());
+document.getElementById('nextBtn').addEventListener('click', ()=> { if(window.__headphonesConnected) nextSong(); else alert('Connect headphones'); });
+document.getElementById('prevBtn').addEventListener('click', ()=> { if(window.__headphonesConnected) prevSong(); else alert('Connect headphones'); });
+
+/* ---------------- Load songs via Spotify (server-side) ---------------- */
+async function loadSongs(){
+  const mood = document.getElementById('moodSelect').value;
+  const lang = document.getElementById('languageSelect').value;
+  const search = document.getElementById('searchInput').value.trim();
+  let query = search || "music";
+  if (!search) {
+    const kw = moodKeywords[mood]?.[lang]?.[0];
+    if (kw) query = kw;
+    else query = mood || "popular";
+  }
+  try {
+    const res = await fetch(`${BACKEND_BASE}/api/spotify/search?q=${encodeURIComponent(query)}&limit=60`);
+    const j = await res.json();
+    const items = (j.tracks && j.tracks.items) ? j.tracks.items : [];
+    songs = items.map(it => ({
+      trackName: it.name,
+      artistName: it.artists.map(a=>a.name).join(', '),
+      previewUrl: it.preview_url,
+      artworkUrl100: it.album?.images?.[1]?.url || it.album?.images?.[0]?.url || ''
+    })).filter(s=>s.previewUrl); // keep only those with preview
+    if (songs.length < 4) {
+      document.getElementById('songList').innerHTML = "<p>No previewable tracks found. Try another mood or search.</p>";
+      return;
+    }
+    currentIndex = 0; displaySongs(); safeLoadSong(0);
+  } catch (err) {
+    console.warn('Spotify search failed', err);
+    document.getElementById('songList').innerHTML = "<p>Search failed.</p>";
+  }
+}
+
+/* ---------------- Song UI & playback ---------------- */
+function displaySongs(){
+  const html = songs.map((s,i)=>`
+    <div class="song-card">
+      <img src="${s.artworkUrl100}">
+      <div class="song-info"><h3>${s.trackName}</h3><p>${s.artistName}</p></div>
+      <div class="controls">
+        <button onclick="safePrevSong()">⏮</button>
+        <button onclick="safeLoadSong(${i})">▶</button>
+        <button onclick="safeNextSong()">⏭</button>
+        <button onclick="showLyrics(${i})">🎤</button>
+      </div>
+    </div>`).join('');
+  document.getElementById('songList').innerHTML = html;
+}
+
+function safeLoadSong(i){
+  if (!window.__headphonesConnected) { alert('Please connect headphones'); return; }
+  loadSong(i);
+}
+function safeNextSong(){ if (!window.__headphonesConnected){ alert('Please connect headphones'); return; } nextSong(); }
+function safePrevSong(){ if (!window.__headphonesConnected){ alert('Please connect headphones'); return; } prevSong(); }
+
+function loadSong(i){
+  currentIndex = i;
+  audio.pause();
+  audio.src = songs[i].previewUrl || '';
+  audio.load();
+  document.getElementById('nowCover').src = songs[i].artworkUrl100 || '';
+  document.getElementById('nowTitle').textContent = songs[i].trackName || '';
+  document.getElementById('nowArtist').textContent = songs[i].artistName || '';
+  // will auto-play on canplay if user gesture exists
+}
+
+/* robust playback */
+audio.addEventListener('canplay', ()=> {
+  audio.play().catch(e=>console.warn('autoplay blocked', e));
+});
+audio.addEventListener('ended', ()=> { nextSong(); });
+audio.addEventListener('error', (e)=> { console.warn('audio error', e); nextSong(); });
+
+function nextSong(){ if(!songs.length) return; currentIndex = (currentIndex+1)%songs.length; loadSong(currentIndex); }
+function prevSong(){ if(!songs.length) return; currentIndex = (currentIndex-1+songs.length)%songs.length; loadSong(currentIndex); }
+
+/* ---------------- Lyrics modal (unchanged) ---------------- */
+async function showLyrics(i){
+  document.getElementById('lyricsModal').style.display='flex';
+  document.getElementById('lyricsTitle').textContent = songs[i].trackName;
+  try {
+    const r = await fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(songs[i].artistName)}/${encodeURIComponent(songs[i].trackName)}`);
+    const j = await r.json();
+    document.getElementById('lyricsText').textContent = j.lyrics || 'Lyrics not found';
+  } catch(e) {
+    document.getElementById('lyricsText').textContent = 'Lyrics not found';
+  }
+}
+document.getElementById('closeLyricsBtn').addEventListener('click', ()=> document.getElementById('lyricsModal').style.display='none');
+
+/* ---------------- Webcam device picker & camera start ---------------- */
+const camVideo = document.getElementById('cam');
+const videoSelect = document.getElementById('videoSelect');
+const startCamSelectedBtn = document.getElementById('startCamSelectedBtn');
+
+async function ensurePermissionForLabels() {
+  try { await navigator.mediaDevices.getUserMedia({ video:true, audio:false }); }
+  catch(e){ console.warn('Permission not granted', e); }
+}
+
+async function listVideoInputs() {
+  await ensurePermissionForLabels();
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const videoInputs = devices.filter(d=>d.kind==='videoinput');
+  videoSelect.innerHTML = '';
+  videoInputs.forEach((d, idx) => {
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    opt.textContent = d.label || `Camera ${idx+1}`;
+    videoSelect.appendChild(opt);
+  });
+  // auto-select likely laptop webcam
+  const prefer = ['integrated','internal','webcam','uvc','usb','camera','intel','hd','truevision'];
+  const found = videoInputs.find(d => prefer.some(k => (d.label||'').toLowerCase().includes(k)));
+  if (found) videoSelect.value = found.deviceId;
+}
+
+async function startCameraByDeviceId(deviceId) {
+  if (camVideo.srcObject) {
+    camVideo.srcObject.getTracks().forEach(t=>t.stop());
+    camVideo.srcObject = null;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } }, audio: false });
+    camVideo.srcObject = stream;
+    await camVideo.play().catch(()=>{});
+  } catch (err) {
+    console.error('start camera failed', err);
+    alert('Could not start selected camera. Try another device or check permissions.');
+  }
+}
+
+startCamSelectedBtn.addEventListener('click', ()=> {
+  const id = videoSelect.value;
+  if (!id) { alert('No camera selected. Allow camera permission and reload.'); return; }
+  startCameraByDeviceId(id);
+});
+
+listVideoInputs();
+navigator.mediaDevices.addEventListener('devicechange', ()=> setTimeout(listVideoInputs, 300));
+
+/* ---------------- Capture & send to backend ---------------- */
+async function captureFrameBlob() {
+  if (!camVideo || !camVideo.videoWidth) throw new Error('Camera not ready');
+  const canvas = document.createElement('canvas');
+  canvas.width = camVideo.videoWidth;
+  canvas.height = camVideo.videoHeight;
+  canvas.getContext('2d').drawImage(camVideo, 0, 0);
+  return await new Promise(res => canvas.toBlob(res, 'image/jpeg'));
+}
+
+async function detectMoodOnce() {
+  try {
+    const blob = await captureFrameBlob();
+    const fd = new FormData();
+    fd.append('image', blob, 'snap.jpg');
+    const res = await fetch(`${BACKEND_BASE}/api/emotion/detect`, { method: 'POST', body: fd });
+    const j = await res.json();
+    if (j && j.emotion) applyDetectedMood(j.emotion, j.scores);
+  } catch (e) {
+    console.error('Detect failed', e);
+    alert('Mood detect failed: ' + (e.message||e));
+  }
+}
+document.getElementById('detectOnceBtn').addEventListener('click', detectMoodOnce);
+
+/* ---------------- Auto-detect loop ---------------- */
+let autoDetect = false, autoInterval=null;
+const DETECT_INTERVAL_MS = 3000;
+let exprEMA = { angry:0, disgust:0, fear:0, happy:0, sad:0, surprise:0, neutral:0 };
+const EMA_ALPHA = 0.45; let lastAppliedMood = null; const APPLY_MIN_INTERVAL = 4000;
+
+document.getElementById('toggleAutoDetectBtn').addEventListener('click', ()=>{
+  autoDetect = !autoDetect;
+  document.getElementById('toggleAutoDetectBtn').textContent = autoDetect ? 'Stop Auto-Detect' : 'Start Auto-Detect';
+  if (autoDetect) {
+    autoInterval = setInterval(async ()=> {
+      try {
+        const blob = await captureFrameBlob();
+        const fd = new FormData();
+        fd.append('image', blob, 'snap.jpg');
+        const res = await fetch(`${BACKEND_BASE}/api/emotion/detect`, { method: 'POST', body: fd });
+        const j = await res.json();
+        if (j && j.scores) {
+          for (const k of Object.keys(exprEMA)) {
+            if (j.scores[k] !== undefined) exprEMA[k] = (1-EMA_ALPHA)*exprEMA[k] + EMA_ALPHA * j.scores[k];
+          }
+          let best='neutral', bestScore=-1;
+          for (const k of Object.keys(exprEMA)) if (exprEMA[k] > bestScore) { best = k; bestScore = exprEMA[k]; }
+          if (bestScore >= 0.35) {
+            const now = Date.now();
+            if (best !== lastAppliedMood && (!window._lastApplyTime || now - window._lastApplyTime > APPLY_MIN_INTERVAL)) {
+              applyDetectedMood(best, exprEMA); lastAppliedMood = best; window._lastApplyTime = now;
+            }
+          } else {
+            if (lastAppliedMood !== 'neutral' && (!window._lastApplyTime || Date.now() - window._lastApplyTime > APPLY_MIN_INTERVAL)) {
+              applyDetectedMood('neutral', exprEMA); lastAppliedMood = 'neutral'; window._lastApplyTime = Date.now();
+            }
+          }
+        } else if (j && j.emotion) applyDetectedMood(j.emotion);
+      } catch (e) { console.warn('auto detect error', e); }
+    }, DETECT_INTERVAL_MS);
+  } else {
+    clearInterval(autoInterval); autoInterval=null;
+  }
+});
+
+/* applyDetectedMood */
+function applyDetectedMood(moodLabel, scores=null) {
+  const valid = ["angry","disgust","fear","happy","sad","neutral","surprise"];
+  if (!valid.includes(moodLabel)) moodLabel = "neutral";
+  document.getElementById('moodSelect').value = moodLabel;
+  const b = document.getElementById('detectorBadge');
+  b.style.display='block';
+  b.textContent = `Detected: ${moodLabel}${scores ? ' ('+Math.round((scores[moodLabel]||0)*100)+'%)' : ''}`;
+  loadSongs();
+}
+
+/* ---------------- Headphone detection & output selection ---------------- */
+document.getElementById('enableDevicesBtn').addEventListener('click', async ()=> {
+  const statusEl = document.getElementById('deviceStatus');
+  try { await navigator.mediaDevices.getUserMedia({ audio:true, video:false }); }
+  catch(e){ console.warn('audio permission', e); }
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const outputs = devices.filter(d=>d.kind==='audiooutput');
+  const sel = document.getElementById('outputSelect'); sel.innerHTML='';
+  outputs.forEach(d => { const opt=document.createElement('option'); opt.value=d.deviceId; opt.textContent=d.label||`Output ${d.deviceId}`; sel.appendChild(opt); });
+  if (outputs.length) sel.style.display='inline-block'; else sel.style.display='none';
+  const keywords = ['headphone','headset','earbud','earbuds','earphone','bluetooth','airpods','wired','jack','usb audio','bt','hs'];
+  const connectedHeadphones = outputs.some(d=> keywords.some(k => (d.label||'').toLowerCase().includes(k)));
+  if (connectedHeadphones) { statusEl.textContent='Headphones detected — playback allowed.'; window.__headphonesConnected = true; }
+  else { statusEl.textContent='No headphones detected. Playback blocked until headphones connect.'; window.__headphonesConnected = false; }
+  sel.onchange = async function(){ const deviceId = sel.value; if (typeof audio.setSinkId === 'function') { try { await audio.setSinkId(deviceId); statusEl.textContent = 'Audio output set to: ' + sel.selectedOptions[0].textContent; } catch(e){ console.warn('setSinkId failed', e); statusEl.textContent='Could not set audio output.';} } else statusEl.textContent='Browser does not support selecting audio output.'; };
+});
+
+/* startup */
+listVideoInputs();
+
+</script>
+</body>
+</html>
